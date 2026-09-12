@@ -1,28 +1,38 @@
 // src/services/ollama-result.service.ts
 
 import {
-  ollamaSectionResultSchema,
-  type OllamaSectionResult,
+  ollamaAnalysisSchema,
+  type OllamaAnalysis,
 } from '../validations/ollama.validation';
 
 /**
- * Parses and validates one Ollama response.
+ * --------------------------------------------------
+ * OLLAMA RESULT VALIDATION SERVICE
+ * --------------------------------------------------
  *
  * Ollama returns the response as a JSON string.
  *
- * This function:
+ * This service:
+ *
  * 1. Parses the JSON string.
- * 2. Validates the parsed data using Zod.
- * 3. Returns a safely typed OllamaSectionResult.
+ * 2. Validates the complete AI analysis using Zod.
+ * 3. Returns a safely typed OllamaAnalysis object.
+ *
+ * The AI analysis now represents the COMPLETE
+ * resume analysis response instead of a single section.
+ */
+
+/**
+ * Parses and validates one complete Ollama response.
  */
 export const validateOllamaResult = (
   rawResult: string,
-): OllamaSectionResult => {
-  let parsed: unknown;
-
+): OllamaAnalysis => {
   // --------------------------------------------------
   // STEP 1: Parse JSON
   // --------------------------------------------------
+
+  let parsed: unknown;
 
   try {
     parsed = JSON.parse(rawResult);
@@ -37,7 +47,7 @@ export const validateOllamaResult = (
   // --------------------------------------------------
 
   const result =
-    ollamaSectionResultSchema.safeParse(parsed);
+    ollamaAnalysisSchema.safeParse(parsed);
 
   // --------------------------------------------------
   // STEP 3: Reject invalid structure
@@ -45,12 +55,12 @@ export const validateOllamaResult = (
 
   if (!result.success) {
     console.error(
-      'Invalid Ollama result:',
+      'Invalid Ollama analysis result:',
       result.error.issues,
     );
 
     throw new Error(
-      'Ollama returned invalid resume structure',
+      'Ollama returned invalid analysis structure',
     );
   }
 

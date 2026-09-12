@@ -1,7 +1,7 @@
 // src/services/ollama.service.ts
 
 import type {
-  OllamaSectionResult,
+  OllamaAnalysis,
 } from '../validations/ollama.validation';
 
 import {
@@ -11,6 +11,14 @@ import {
 import type {
   DetectedResumeSection,
 } from './section-detector.service';
+
+import type {
+  ParsedSkillCategory,
+} from './skills-parser.service';
+
+import type {
+  ParsedProject,
+} from './project-parser.service';
 
 const OLLAMA_URL =
   process.env.OLLAMA_URL ??
@@ -28,554 +36,600 @@ interface OllamaChatResponse {
 }
 
 /**
- * Builds a prompt for parsing detected resume sections.
- *
- * IMPORTANT:
- *
- * The section detector has already identified the
- * boundaries of the resume.
- *
- * Ollama should NOT parse the entire resume again.
- *
- * For known sections, the section type is already known.
- *
- * For unknown/custom sections, Ollama may determine
- * whether the section represents one of our supported
- * resume categories.
+ * Find a specific detected resume section.
  */
-const buildSectionPrompt = (
-  section: DetectedResumeSection,
+const findSection = (
+  sections: DetectedResumeSection[],
+  normalizedType: string,
+): DetectedResumeSection | undefined => {
+  return sections.find(
+    (section) =>
+      section.normalizedType === normalizedType,
+  );
+};
+
+/**
+ * Build a FLAT list of skills.
+ *
+ * Important:
+ *
+ * Ollama receives individual skill values instead
+ * of category strings.
+ *
+ * This prevents output such as:
+ *
+ * "Frontend: React.js, Redux, JavaScript..."
+ *
+ * being treated as one skill.
+ */
+const buildSkillsReference = (
+  parsedSkills: ParsedSkillCategory[],
 ): string => {
-  const isUnknown =
-    section.detectionMethod === 'unknown';
+  const skills = parsedSkills.flatMap(
+    (category) => category.items,
+  );
+
+  if (skills.length === 0) {
+    return 'No skills detected.';
+  }
+
+  return skills
+    .map(
+      (skill, index) =>
+        `${index + 1}. ${skill}`,
+    )
+    .join('\n');
+};
+
+/**
+ * Build already-parsed project information.
+ *
+ * Project detection is handled by TypeScript.
+ *
+ * Ollama only performs semantic analysis.
+ */
+const buildProjectsReference = (
+  parsedProjects: ParsedProject[],
+): string => {
+  if (parsedProjects.length === 0) {
+    return 'No projects detected.';
+  }
+
+  return parsedProjects
+    .map(
+      (project) => `
+PROJECT ID: ${project.id}
+
+PROJECT NAME: ${project.name}
+
+EXTRACTED TECHNOLOGIES:
+${
+  project.technologies.length > 0
+    ? project.technologies.join(', ')
+    : 'None detected'
+}
+
+PROJECT BULLETS:
+${
+  project.bullets.length > 0
+    ? project.bullets.join('\n')
+    : 'None detected'
+}
+`,
+    )
+    .join(
+      '\n------------------------------\n',
+    );
+};
+
+/**
+ * Builds the AI semantic-analysis prompt.
+ *
+ * Architecture:
+ *
+ * PDF
+ *   ↓
+ * deterministic parsing
+ *   ↓
+ * structured resume data
+ *   ↓
+ * Ollama semantic analysis
+ *   ↓
+ * deterministic scoring
+ *
+ * Ollama does NOT calculate the final score.
+ */
+const buildResumeAnalysisPrompt = (
+  sections: DetectedResumeSection[],
+  parsedSkills: ParsedSkillCategory[],
+  parsedProjects: ParsedProject[],
+): string => {
+  const summarySection =
+    findSection(
+      sections,
+      'summary',
+    );
+
+  const certificationsSection =
+    findSection(
+      sections,
+      'certifications',
+    );
+
+  const experienceSection =
+    findSection(
+      sections,
+      'experience',
+    );
+
+  const summary =
+    summarySection?.content?.trim() ?? '';
+
+  const certifications =
+    certificationsSection?.content?.trim() ?? '';
+
+  const experience =
+    experienceSection?.content?.trim() ?? '';
+
+  const skillsReference =
+    buildSkillsReference(parsedSkills);
+
+  const projectsReference =
+    buildProjectsReference(parsedProjects);
 
   return `
-You are a resume section extraction system.
+You are a strict resume semantic analysis system.
 
-Your job is to extract structured information from ONE
-resume section.
+Return ONLY one valid JSON object.
 
-The section boundary has already been determined by the
-application.
+Do not use markdown.
+Do not explain anything outside JSON.
+Do not calculate a score.
+Do not recommend jobs.
+Do not rewrite the resume.
+Do not invent information.
 
-Do NOT analyze the entire candidate.
+==================================================
+AVAILABLE RESUME SKILLS
+==================================================
 
-Do NOT score the resume.
+These are the ONLY skills you may return in:
 
-Do NOT recommend jobs.
+- demonstratedSkills
+- supportedSkills
+- mentionedSkills
 
-Do NOT judge the candidate.
+${skillsReference}
 
-Do NOT invent information.
+IMPORTANT:
 
-Do NOT add information that is not present.
+Each skill is an individual value.
 
-Return ONLY valid JSON.
+When returning a skill, copy the skill EXACTLY
+from the list above.
 
-Do NOT return markdown.
+NEVER combine multiple skills into one array item.
 
-Do NOT return explanations.
+BAD:
+"Frontend: React.js, Redux, JavaScript"
 
-Do NOT return code fences.
+GOOD:
+"React.js"
+"Redux"
+"JavaScript (ES6+)"
 
---------------------------------------------------
-SECTION INFORMATION
---------------------------------------------------
+==================================================
+PROJECTS
+==================================================
 
-Original heading:
-${section.heading}
+Projects have already been detected by TypeScript.
 
-Detected section type:
-${section.normalizedType}
+Analyze ONLY these projects:
 
-Detection method:
-${section.detectionMethod}
+${projectsReference}
 
---------------------------------------------------
-IMPORTANT CLASSIFICATION RULE
---------------------------------------------------
+For every supplied project return:
+
+- id
+- name
+- type
+- description
+- technologies
+- demonstratedSkills
+- relevanceToDevelopment
+
+Rules:
+
+1. Preserve the exact project ID.
+
+2. Preserve the exact project name.
+
+3. Do not create projects.
+
+4. Do not remove projects.
+
+5. Do not merge projects.
+
+6. Do not split projects.
+
+7. Technologies must come from the extracted
+   technologies provided above.
+
+8. Do not invent technologies.
+
+9. demonstratedSkills must contain only individual
+   skills from AVAILABLE RESUME SKILLS.
+
+10. demonstratedSkills must be supported by the
+    project bullets.
+
+11. relevanceToDevelopment must be a short
+    evidence-based explanation.
+
+12. type and relevanceToDevelopment are different.
+
+type example:
+"Full-Stack Web Development"
+
+relevanceToDevelopment example:
+"Demonstrates full-stack development through
+React.js UI development, Node.js and Express.js
+APIs, MongoDB data handling, authentication,
+and frontend-backend integration."
+
+Possible project types:
+
+Frontend Development
+Backend Development
+Full-Stack Web Development
+Mobile Development
+Data Science
+Machine Learning
+AI
+DevOps
+Cybersecurity
+Testing / QA
+Data Analytics
+Other
+
+If no projects exist:
+
+"projects": []
+
+==================================================
+CERTIFICATIONS
+==================================================
+
+Certification section:
 
 ${
-  isUnknown
-    ? `
-The application could not confidently determine the
-semantic type of this section.
-
-Determine whether this section most closely represents:
-
-- summary
-- skills
-- experience
-- education
-- projects
-- certifications
-- custom
-
-If it clearly represents one of the supported categories,
-use that category.
-
-If it does not clearly represent one of them, use:
-
-"custom"
-
-Do NOT force the section into a category when the
-evidence is insufficient.
-`
-    : `
-The application already determined the section type.
-
-Trust the detected section type:
-
-${section.normalizedType}
-
-Do NOT change the section type simply because the content
-contains words associated with another category.
-`
+  certifications ||
+  'NO CERTIFICATION SECTION'
 }
 
---------------------------------------------------
-GENERAL RULES
---------------------------------------------------
-
-1. Extract only information present in this section.
-
-2. Do not invent missing information.
-
-3. Preserve the original meaning.
-
-4. Preserve original wording where practical.
-
-5. Do not create information from assumptions.
-
-6. Do not create URLs unless an actual URL exists.
-
-7. Do not create empty objects for information that does
-   not exist.
-
-8. If a list has no items, return [].
-
-9. Optional fields should be omitted when information is
-   unavailable.
-
-10. Do not use null for optional fields.
-
-11. IDs should be simple deterministic identifiers such as:
-    "experience-1"
-    "education-1"
-    "project-1"
-    "certification-1"
-    "section-1"
-
---------------------------------------------------
-SUMMARY
---------------------------------------------------
-
-If the section represents a summary/profile/objective,
-return:
-
-{
-  "type": "summary",
-  "summary": "summary text"
-}
-
-Only include summary text that actually exists.
-
---------------------------------------------------
-SKILLS
---------------------------------------------------
-
-If the section represents skills, preserve the categories
-provided by the resume.
-
-Example:
-
-{
-  "type": "skills",
-  "skills": [
-    {
-      "category": "Languages",
-      "items": [
-        "JavaScript",
-        "Python",
-        "SQL"
-      ]
-    },
-    {
-      "category": "Frontend",
-      "items": [
-        "React.js",
-        "Redux"
-      ]
-    }
-  ]
-}
-
-Do NOT force skills into developer-specific categories.
-
-If the resume uses categories such as:
-
-Languages
-Frontend
-Backend
-Databases
-Tools
-Frameworks
-Cloud
-Data
-Testing
-
-preserve those categories.
-
---------------------------------------------------
-EXPERIENCE
---------------------------------------------------
-
-If the section represents actual professional experience,
-extract employment entries.
-
-Actual experience may include:
-
-- full-time employment
-- internship
-- contract
-- freelance
-- part-time work
-
-Use:
-
-{
-  "type": "experience",
-  "experience": [
-    {
-      "id": "experience-1",
-      "title": "Job Title",
-      "organization": "Company",
-      "location": "Location",
-      "startDate": "2024",
-      "endDate": "2026",
-      "isCurrent": false,
-      "employmentType": "full-time",
-      "bullets": [
-        "First responsibility or achievement",
-        "Second responsibility or achievement"
-      ]
-    }
-  ]
-}
-
-Only include fields supported by the section.
-
-IMPORTANT:
-
-Do NOT put projects into experience.
-
---------------------------------------------------
-EDUCATION
---------------------------------------------------
-
-If the section represents education, extract ALL education
-entries.
-
-Use:
-
-{
-  "type": "education",
-  "education": [
-    {
-      "id": "education-1",
-      "degree": "Bachelor of Science",
-      "institution": "University of Mumbai",
-      "field": "Information Technology",
-      "startDate": "2023",
-      "endDate": "2026",
-      "grade": "8.70"
-    }
-  ]
-}
-
-Only include fields supported by the resume.
-
-Do not confuse CGPA/grade lines with section headings.
-
---------------------------------------------------
-PROJECTS
---------------------------------------------------
-
-If the section represents projects, extract ALL projects.
-
-Every project must use:
-
-{
-  "id": "project-1",
-  "name": "Project Name",
-  "description": "Short description if clearly available",
-  "bullets": [
-    "First project bullet",
-    "Second project bullet"
-  ],
-  "technologies": [
-    "React.js",
-    "Node.js",
-    "MongoDB"
-  ]
-}
-
-IMPORTANT:
-
-- "bullets" MUST contain strings only.
-- Extract ALL project bullets.
-- Do NOT put project information into experience.
-- Extract technologies explicitly mentioned in the
-  project title, description, or bullets.
-- Do not invent technologies.
-
---------------------------------------------------
-CERTIFICATIONS
---------------------------------------------------
-
-If the section represents certifications, extract ALL
-certifications.
-
-Use:
-
-{
-  "type": "certifications",
-  "certifications": [
-    {
-      "id": "certification-1",
-      "name": "Certification Name",
-      "issuer": "Organization",
-      "status": "completed",
-      "date": "2026",
-      "description": "Description if present"
-    }
-  ]
-}
-
-Allowed status values:
-
-- completed
-- in-progress
-- expired
-- unknown
-
-If there are NO certifications in this section:
+If there is NO certification section:
 
 "certifications": []
 
-IMPORTANT:
+Do not invent certifications.
 
-Never create an empty certification object.
+If certifications exist, analyze only certifications
+actually present.
 
-Do NOT invent a certification simply because the resume
-does not contain one.
+For each certification return:
 
---------------------------------------------------
-CUSTOM SECTIONS
---------------------------------------------------
+- id
+- name
+- issuer when present
+- status when present
+- date when present
+- domain
+- supportedSkills
 
-If the section does not clearly belong to:
+supportedSkills must contain only individual
+skills from AVAILABLE RESUME SKILLS.
+
+Possible domains:
+
+Web Development
+Backend Development
+Database
+Cloud
+DevOps
+Cybersecurity
+Data Analytics
+Data Science
+Machine Learning
+Programming
+Testing / QA
+Other
+
+==================================================
+EMPLOYMENT EXPERIENCE
+==================================================
+
+Experience section:
+
+${
+  experience ||
+  'NO EMPLOYMENT EXPERIENCE SECTION'
+}
+
+If there is NO experience section:
+
+"experience": []
+
+Only analyze actual employment experience.
+
+DO NOT treat these as employment:
+
+- projects
+- personal projects
+- college projects
+- coding clubs
+- college clubs
+- activities
+- academic activities
+- volunteer activities
+
+Do not invent employment.
+
+For actual employment return:
+
+- id
+- title
+- organization when present
+- employmentType when present
+- startDate when present
+- endDate when present
+- isCurrent when present
+- domain
+- demonstratedSkills
+
+demonstratedSkills must contain only individual
+skills from AVAILABLE RESUME SKILLS.
+
+==================================================
+PROFILE
+==================================================
+
+Analyze ONLY the Summary.
+
+SUMMARY:
+
+${
+  summary ||
+  'NO SUMMARY SECTION'
+}
+
+Return:
 
 - summary
-- skills
-- experience
-- education
-- projects
-- certifications
+- mentionedRoles
+- mentionedSkills
+- strengths
+- issues
 
-preserve it as a custom section.
+Rules:
+
+mentionedRoles:
+
+Only roles explicitly mentioned in the Summary.
+
+mentionedSkills:
+
+Only individual skills explicitly mentioned in
+the Summary AND present in AVAILABLE RESUME SKILLS.
+
+Do not return skill categories.
 
 For example:
 
-AWARDS
-PUBLICATIONS
-RESEARCH
-VOLUNTEER WORK
-ACTIVITIES
-LEADERSHIP
-LANGUAGES
+BAD:
+"Frontend: React.js, Redux"
 
-Use:
+GOOD:
+"React.js"
 
-{
-  "type": "custom",
-  "section": {
-    "id": "section-1",
-    "heading": "Original Heading",
-    "normalizedType": "custom",
-    "content": "Section content",
-    "items": [
-      "item 1",
-      "item 2"
-    ]
-  }
-}
+strengths:
 
-Preserve the original heading.
+Only identify strengths supported by the Summary.
 
-Do NOT invent a custom section.
+issues:
 
---------------------------------------------------
-OUTPUT RULES
---------------------------------------------------
+Only identify genuine issues supported by the Summary.
 
-Return exactly ONE JSON object.
+Do not invent issues.
 
-The "type" field MUST be exactly one of:
+If no Summary exists:
 
-"summary"
-"skills"
-"experience"
-"education"
-"projects"
-"certifications"
-"custom"
+summary: ""
 
-Do not return any other top-level fields.
+mentionedRoles: []
 
---------------------------------------------------
-RESUME SECTION
---------------------------------------------------
+mentionedSkills: []
 
-${section.content}
+strengths: []
 
---------------------------------------------------
+issues: []
+
+==================================================
+NO-INVENTION RULE
+==================================================
+
+Never invent:
+
+- projects
+- certifications
+- employment
+- internships
+- companies
+- technologies
+- skills
+- dates
+- achievements
+- qualifications
+- roles
+
+Never use placeholder values.
+
+If information does not exist:
+
+Use an empty array.
+
+If a required string cannot be safely determined:
+
+Use an empty string.
+
+==================================================
+OUTPUT CONTRACT
+==================================================
+
+The top-level object MUST contain:
+
+projects
+certifications
+experience
+profile
+
+The profile object MUST contain:
+
+summary
+mentionedRoles
+mentionedSkills
+strengths
+issues
+
+Every project object MUST contain:
+
+id
+name
+type
+description
+technologies
+demonstratedSkills
+relevanceToDevelopment
+
+Every certification object MUST contain:
+
+id
+name
+domain
+supportedSkills
+
+Every experience object MUST contain:
+
+id
+title
+domain
+demonstratedSkills
+
+==================================================
 FINAL CHECK
---------------------------------------------------
+==================================================
 
-Before responding, verify:
+Before returning:
 
-- Only this section was analyzed.
-- No information was invented.
-- Projects are never placed in experience.
-- Project bullets are strings.
-- All project bullets are included.
-- Project technologies are extracted when present.
-- Education entries are preserved.
-- Skill categories are preserved.
-- Certifications are not invented.
-- Unknown sections are preserved as custom when appropriate.
-- No URLs are invented.
-- Optional fields are omitted when unavailable.
-- The response is valid JSON.
-- The response contains JSON only.
+- Return JSON only.
+- Include every detected project.
+- Preserve project IDs.
+- Preserve project names.
+- Use individual skills only.
+- Never combine skill categories into one skill.
+- Do not invent projects.
+- Do not invent certifications.
+- Do not invent employment.
+- Activities are NOT employment.
+- Certifications are [] when absent.
+- Experience is [] when absent.
+- demonstratedSkills must use available skills.
+- supportedSkills must use available skills.
+- mentionedSkills must use available skills.
+- Summary must be preserved.
+- Do not calculate a score.
+- Do not recommend jobs.
+
+Return the JSON now.
 `;
 };
 
 /**
- * Sends one detected resume section to Ollama.
+ * Sends structured resume information to Ollama.
  *
- * Ollama initially returns JSON as a string.
- *
- * The string is then:
- *
- * JSON.parse()
- *      ↓
- * Zod validation
- *      ↓
- * OllamaSectionResult
- */
-const parseSectionWithOllama = async (
-  section: DetectedResumeSection,
-): Promise<OllamaSectionResult> => {
-  const prompt = buildSectionPrompt(section);
-
-  const response = await fetch(
-    `${OLLAMA_URL}/api/chat`,
-    {
-      method: 'POST',
-
-      headers: {
-        'Content-Type': 'application/json',
-      },
-
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-
-        stream: false,
-
-        // Ask Ollama to return JSON.
-        format: 'json',
-
-        options: {
-          // More deterministic output.
-          temperature: 0,
-        },
-      }),
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(
-      `Ollama request failed: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  const data =
-    (await response.json()) as OllamaChatResponse;
-
-  const content = data.message?.content;
-
-  if (!content) {
-    throw new Error(
-      'Ollama returned an empty response',
-    );
-  }
-
-  // Validate Ollama's JSON before returning it.
-  return validateOllamaResult(content);
-};
-
-/**
- * Parses all detected resume sections.
- *
- * Each section is sent independently to Ollama.
- *
- * Example:
- *
- * PROFILE
- *     ↓
- * Ollama
- *     ↓
- * Zod validation
- *
- * EDUCATION
- *     ↓
- * Ollama
- *     ↓
- * Zod validation
- *
- * PROJECTS
- *     ↓
- * Ollama
- *     ↓
- * Zod validation
- *
- * ACTIVITIES
- *     ↓
- * Ollama
- *     ↓
- * Zod validation
+ * Ollama performs semantic analysis only.
+ * Final scoring is handled separately.
  */
 export const parseResumeSectionsWithOllama =
   async (
     sections: DetectedResumeSection[],
-  ): Promise<OllamaSectionResult[]> => {
-    const results: OllamaSectionResult[] = [];
+    parsedSkills: ParsedSkillCategory[] = [],
+    parsedProjects: ParsedProject[] = [],
+  ): Promise<OllamaAnalysis> => {
+    const prompt =
+      buildResumeAnalysisPrompt(
+        sections,
+        parsedSkills,
+        parsedProjects,
+      );
 
-    for (const section of sections) {
-      const result =
-        await parseSectionWithOllama(section);
+    const response = await fetch(
+      `${OLLAMA_URL}/api/chat`,
+      {
+        method: 'POST',
 
-      results.push(result);
+        headers: {
+          'Content-Type': 'application/json',
+        },
+
+        body: JSON.stringify({
+          model: OLLAMA_MODEL,
+
+          messages: [
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+
+          stream: false,
+
+          format: 'json',
+
+          keep_alive: '10m',
+
+          options: {
+            temperature: 0,
+
+            /*
+             * Keep enough room for the structured
+             * analysis without going back to 1800.
+             */
+            num_predict: 1000,
+          },
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `Ollama request failed: ${response.status} ${response.statusText}`,
+      );
     }
 
-    return results;
+    const data =
+      (await response.json()) as OllamaChatResponse;
+
+    const content =
+      data.message?.content;
+
+    if (!content) {
+      throw new Error(
+        'Ollama returned an empty response',
+      );
+    }
+
+    /*
+     * Parse JSON + validate using Zod.
+     */
+    return validateOllamaResult(content);
   };

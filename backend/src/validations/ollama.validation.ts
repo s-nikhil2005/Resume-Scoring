@@ -4,111 +4,29 @@ import { z } from 'zod';
 
 /**
  * --------------------------------------------------
- * SUMMARY
+ * PROJECT ANALYSIS
  * --------------------------------------------------
  */
 
-const summaryResultSchema = z.object({
-  type: z.literal('summary'),
-  summary: z.string(),
-});
-
-/**
- * --------------------------------------------------
- * SKILLS
- * --------------------------------------------------
- */
-
-const skillCategorySchema = z.object({
-  category: z.string(),
-  items: z.array(z.string()),
-});
-
-const skillsResultSchema = z.object({
-  type: z.literal('skills'),
-  skills: z.array(skillCategorySchema),
-});
-
-/**
- * --------------------------------------------------
- * EXPERIENCE
- * --------------------------------------------------
- */
-
-const experienceSchema = z.object({
+const projectAnalysisSchema = z.object({
   id: z.string(),
-  title: z.string().optional(),
-  organization: z.string().optional(),
-  location: z.string().optional(),
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
-  isCurrent: z.boolean().optional(),
-  employmentType: z
-    .enum([
-      'full-time',
-      'internship',
-      'contract',
-      'freelance',
-      'part-time',
-    ])
-    .optional(),
-  bullets: z.array(z.string()),
-});
-
-const experienceResultSchema = z.object({
-  type: z.literal('experience'),
-  experience: z.array(experienceSchema),
-});
-
-/**
- * --------------------------------------------------
- * EDUCATION
- * --------------------------------------------------
- */
-
-const educationSchema = z.object({
-  id: z.string(),
-  degree: z.string().optional(),
-  institution: z.string().optional(),
-  field: z.string().optional(),
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
-  grade: z.string().optional(),
-});
-
-const educationResultSchema = z.object({
-  type: z.literal('education'),
-  education: z.array(educationSchema),
-});
-
-/**
- * --------------------------------------------------
- * PROJECTS
- * --------------------------------------------------
- */
-
-const projectSchema = z.object({
-  id: z.string(),
-  name: z.string().optional(),
+  name: z.string(),
+  type: z.string(),
   description: z.string().optional(),
-  bullets: z.array(z.string()),
   technologies: z.array(z.string()),
-});
-
-const projectsResultSchema = z.object({
-  type: z.literal('projects'),
-  projects: z.array(projectSchema),
+  demonstratedSkills: z.array(z.string()),
+  relevanceToDevelopment: z.string(),
 });
 
 /**
  * --------------------------------------------------
- * CERTIFICATIONS
+ * CERTIFICATION ANALYSIS
  * --------------------------------------------------
  */
 
-const certificationSchema = z.object({
+const certificationAnalysisSchema = z.object({
   id: z.string(),
-  name: z.string().optional(),
+  name: z.string(),
   issuer: z.string().optional(),
   status: z
     .enum([
@@ -119,59 +37,76 @@ const certificationSchema = z.object({
     ])
     .optional(),
   date: z.string().optional(),
-  description: z.string().optional(),
-});
-
-const certificationsResultSchema = z.object({
-  type: z.literal('certifications'),
-  certifications: z.array(
-    certificationSchema,
-  ),
+  domain: z.string(),
+  supportedSkills: z.array(z.string()),
 });
 
 /**
  * --------------------------------------------------
- * CUSTOM SECTION
+ * EXPERIENCE ANALYSIS
  * --------------------------------------------------
  */
 
-const customSectionSchema = z.object({
+const experienceAnalysisSchema = z.object({
   id: z.string(),
-  heading: z.string(),
-  normalizedType: z.string(),
-  content: z.string().optional(),
-  items: z.array(z.string()).optional(),
-});
+  title: z.string(),
+  organization: z.string().optional(),
 
-const customResultSchema = z.object({
-  type: z.literal('custom'),
-  section: customSectionSchema,
+  // Employment type can vary between resumes.
+  // Ollama may return values such as:
+  // full-time, internship, freelance, etc.
+  // We will normalize this later in TypeScript.
+  employmentType: z.string().optional(),
+
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  isCurrent: z.boolean().optional(),
+
+  domain: z.string(),
+
+  demonstratedSkills: z.array(z.string()),
 });
 
 /**
  * --------------------------------------------------
- * UNION
+ * PROFILE ANALYSIS
  * --------------------------------------------------
- *
- * Ollama can return exactly one of these
- * section result types.
  */
 
-export const ollamaSectionResultSchema =
-  z.discriminatedUnion('type', [
-    summaryResultSchema,
-    skillsResultSchema,
-    experienceResultSchema,
-    educationResultSchema,
-    projectsResultSchema,
-    certificationsResultSchema,
-    customResultSchema,
-  ]);
+const profileAnalysisSchema = z.object({
+  summary: z.string(),
+  mentionedRoles: z.array(z.string()),
+  mentionedSkills: z.array(z.string()),
+  strengths: z.array(z.string()),
+  issues: z.array(z.string()),
+});
 
 /**
- * TypeScript type generated automatically
- * from the Zod schema.
+ * --------------------------------------------------
+ * COMPLETE OLLAMA ANALYSIS
+ * --------------------------------------------------
  */
-export type OllamaSectionResult = z.infer<
-  typeof ollamaSectionResultSchema
+
+export const ollamaAnalysisSchema = z.object({
+  projects: z.array(projectAnalysisSchema),
+
+  certifications: z.array(
+    certificationAnalysisSchema,
+  ),
+
+  experience: z.array(
+    experienceAnalysisSchema,
+  ),
+
+  profile: profileAnalysisSchema,
+});
+
+/**
+ * --------------------------------------------------
+ * TYPES
+ * --------------------------------------------------
+ */
+
+export type OllamaAnalysis = z.infer<
+  typeof ollamaAnalysisSchema
 >;
