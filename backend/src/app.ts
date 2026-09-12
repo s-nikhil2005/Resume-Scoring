@@ -6,6 +6,10 @@ import authRouter from './routes/auth.routes';
 import analyzeRouter from './routes/analyze.routes';
 import cookieParser from 'cookie-parser';
 
+import {
+  errorMiddleware,
+} from './middlewares/error.middleware';
+
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
@@ -32,5 +36,12 @@ app.get('/', (req, res) => {
   res.send('Welcome to the world of Different Tools...');
 });
 
+
+// --------------------------------------------------
+// Global Error Handler
+// Must be registered after all routes
+// --------------------------------------------------
+
+app.use(errorMiddleware);
 
 export default app;
