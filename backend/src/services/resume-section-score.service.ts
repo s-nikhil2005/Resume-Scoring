@@ -496,14 +496,39 @@ const calculateLanguageSectionScore = (
 };
 
 // --------------------------------------------------
-// Average Score
+// ATS Score
+// --------------------------------------------------
+//
+// Education is intentionally excluded.
+//
+// ATS Score considers only:
+//
+// 1. Structure
+// 2. Contact
+// 3. Skills
+// 4. Projects
+// 5. Language
+//
+// Education is still analyzed separately.
+// Experience and Certifications are also analyzed
+// separately when they are present.
 // --------------------------------------------------
 
 const calculateAverageScore = (
   sectionScores: ResumeSectionScores,
 ): ResumeScoreSummary => {
+  // Only these five sections contribute
+  // to the final ATS Score.
+  const atsSections = [
+    sectionScores.structure,
+    sectionScores.contact,
+    sectionScores.skills,
+    sectionScores.projects,
+    sectionScores.language,
+  ];
+
   const applicableScores =
-    Object.values(sectionScores)
+    atsSections
       .filter(
         (section) =>
           section.applicable,

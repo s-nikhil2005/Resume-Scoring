@@ -47,8 +47,17 @@ import {
 } from '../services/certification-analysis.service';
 
 import {
+  generateCertificationSuggestions,
+} from '../services/certification-suggestion.service';
+
+import {
   analyzeLanguage,
 } from '../services/language-analysis.service';
+
+import {
+  analyzeExperienceSkillAlignment,
+  generateExperienceSkillSuggestions,
+} from '../services/experience-suggestion.service';
 
 import {
   calculateLanguageScore,
@@ -61,6 +70,14 @@ import {
 import {
   calculateResumeSectionScores,
 } from '../services/resume-section-score.service';
+
+import {
+  generateResumeSuggestions,
+} from '../services/resume-suggestion.service';
+
+import {
+  buildAnalyzeResumeResponse,
+} from '../services/analyze-response.service';
 
 import type {
   CertificationAnalysisResult,
@@ -217,6 +234,22 @@ export const analyzeResume = async (
         : [];
 
     // --------------------------------------------------
+    // Prepare resume skills
+    // --------------------------------------------------
+
+    /**
+     * Certification and Experience analysis need the
+     * actual individual skill names from the Technical
+     * Skills section.
+     */
+
+    const resumeSkills: string[] =
+      parsedSkills.flatMap(
+        (category) =>
+          category.items,
+      );
+
+    // --------------------------------------------------
     // 10. Extract projects deterministically
     // --------------------------------------------------
 
@@ -314,6 +347,7 @@ export const analyzeResume = async (
      * - detected resume sections
      * - deterministic skills
      * - deterministic projects
+     * - deterministic experience
      *
      * Ollama performs semantic analysis such as:
      *
@@ -331,6 +365,28 @@ export const analyzeResume = async (
         sections,
         parsedSkills,
         parsedProjects,
+        parsedExperience,
+      );
+
+    // --------------------------------------------------
+    // Experience ↔ Skills alignment
+    // --------------------------------------------------
+
+    const aiExperiences =
+      Array.isArray(aiResults.experience)
+        ? aiResults.experience
+        : [];
+
+    const experienceSkillAlignment =
+      analyzeExperienceSkillAlignment(
+        parsedExperience,
+        resumeSkills,
+        aiExperiences,
+      );
+
+    const experienceSkillSuggestions =
+      generateExperienceSkillSuggestions(
+        experienceSkillAlignment,
       );
 
     // --------------------------------------------------
@@ -412,15 +468,11 @@ export const analyzeResume = async (
     // --------------------------------------------------
 
     /**
-     * Certification analysis needs only the actual
-     * skill names.
+     * resumeSkills was already prepared after the
+     * Technical Skills parser.
+     *
+     * It is reused here for certification analysis.
      */
-
-    const resumeSkills: string[] =
-      parsedSkills.flatMap(
-        (category) =>
-          category.items,
-      );
 
     // --------------------------------------------------
     // 19. Analyze certifications semantically
@@ -462,7 +514,18 @@ export const analyzeResume = async (
     }
 
     // --------------------------------------------------
-    // 20. Analyze resume language
+    // 20. Generate certification suggestions
+    // --------------------------------------------------
+
+    const certificationSuggestions =
+      generateCertificationSuggestions(
+        parsedCertifications,
+        certificationAnalysis,
+        resumeSkills,
+      );
+
+    // --------------------------------------------------
+    // 21. Analyze resume language
     // --------------------------------------------------
 
     /**
@@ -484,7 +547,7 @@ export const analyzeResume = async (
       );
 
     // --------------------------------------------------
-    // 21. Calculate deterministic language score
+    // 22. Calculate deterministic language score
     // --------------------------------------------------
 
     /**
@@ -503,7 +566,7 @@ export const analyzeResume = async (
       );
 
     // --------------------------------------------------
-    // 22. Calculate resume section scores
+    // 23. Calculate resume section scores
     // --------------------------------------------------
 
     /**
@@ -513,8 +576,8 @@ export const analyzeResume = async (
      * Optional sections such as Experience and
      * Certifications are excluded when absent.
      *
-     * The average is calculated only from applicable
-     * sections.
+     * Education is still calculated separately,
+     * but it is NOT included in the ATS Score.
      */
 
     const resumeSectionScores =
@@ -546,98 +609,129 @@ export const analyzeResume = async (
       });
 
     // --------------------------------------------------
-    // 23. Calculate final ATS Score
+    // 24. Calculate final ATS Score
     // --------------------------------------------------
 
     /**
-     * The current ATS Score is the average of all
-     * applicable resume section scores.
+     * The ATS Score is calculated inside
+     * calculateResumeSectionScores().
      *
-     * Example:
+     * Only these five sections contribute:
      *
-     * Structure      85
-     * Contact       100
-     * Skills        100
-     * Projects       90
-     * Education     100
-     * Language       97
+     * Structure
+     * Contact
+     * Skills
+     * Projects
+     * Language
      *
-     * ATS Score =
+     * Education is excluded.
      *
-     * (85 + 100 + 100 + 90 + 100 + 97) / 6
-     *
-     * = 95.33
-     *
-     * Rounded:
-     *
-     * 95
+     * Experience and Certifications are excluded
+     * from ATS Score as well.
      */
 
     const atsScore =
       resumeSectionScores.averageScore;
 
     // --------------------------------------------------
-    // 24. Return complete analysis result
+    // 25. Generate resume suggestions
     // --------------------------------------------------
 
-    return res.status(200).json({
-      /**
-       * Text ultimately extracted from the resume.
-       *
-       * This can come from:
-       * 1. Normal PDF text extraction
-       * 2. OCR fallback
-       */
+    /**
+     * Suggestions are generated from the existing
+     * deterministic section scores and project-skill
+     * alignment.
+     *
+     * Current suggestion categories:
+     *
+     * - Structure
+     * - Contact
+     * - Skills
+     * - Projects
+     * - Language
+     *
+     * Project → Skills suggestions use the existing
+     * projectSkillAlignment result.
+     *
+     * Education and Experience are passed to the
+     * suggestion engine for fresher-aware suggestions.
+     *
+     * Certification suggestions are generated
+     * separately and added below.
+     */
 
-      rawText: extractedText,
+    const resumeSuggestions =
+      generateResumeSuggestions(
+        resumeSectionScores.sectionScores,
+        parsedContact,
+        cleanText,
+        projectSkillAlignment,
+        parsedEducation,
+        parsedExperience,
+      );
 
-      cleanText,
+    resumeSuggestions.suggestions.push(
+      ...certificationSuggestions,
+      ...experienceSkillSuggestions,
+    );
 
-      // Deterministic contact extraction
-      parsedContact,
+    // --------------------------------------------------
+    // 26. Build clean API response
+    // --------------------------------------------------
 
-      // Detected sections
-      sections,
+    /**
+     * Internal parsing and AI data are not returned
+     * directly to the frontend.
+     *
+     * The response service exposes only the data needed
+     * by the final frontend experience:
+     *
+     * - Average ATS Score
+     * - Individual Section Scores
+     * - Resume Content
+     * - Relationship Analysis
+     * - Language Analysis
+     * - Suggestions
+     */
 
-      // Deterministic skill extraction
-      parsedSkills,
+    const analyzeResponse =
+      buildAnalyzeResumeResponse({
+        atsScore,
 
-      // Deterministic project extraction
-      parsedProjects,
+        resumeSectionScores:
+          resumeSectionScores.sectionScores,
 
-      // Deterministic education extraction
-      parsedEducation,
+        parsedContact,
 
-      // Deterministic experience extraction
-      parsedExperience,
+        parsedSkills,
 
-      // Deterministic certification extraction
-      parsedCertifications,
+        parsedProjects,
 
-      // Project ↔ Resume Skills comparison
-      projectSkillAlignment,
+        parsedEducation,
 
-      // Certification semantic analysis
-      certificationAnalysis,
+        parsedExperience,
 
-      // Language analysis using LanguageTool
-      languageAnalysis,
+        parsedCertifications,
 
-      // Complete Language Score
-      languageScore,
+        projectSkillAlignment,
 
-      // Individual section scores + average
-      resumeSectionScores,
+        experienceSkillAlignment,
 
-      // Final ATS Score
-      atsScore,
+        certificationAnalysis,
 
-      // AI semantic analysis
-      aiResults,
-    });
+        languageAnalysis,
+
+        languageScore,
+
+        resumeSuggestions,
+      });
+
+    return res.status(200).json(
+      analyzeResponse,
+    );
   } catch (error) {
     // --------------------------------------------------
-    // 25. Handle analysis errors
+    // 27. Handle analysis errors
     // --------------------------------------------------
 
     console.error(

@@ -1,5 +1,3 @@
-// src/services/ollama.service.ts
-
 import type {
   OllamaAnalysis,
 } from '../validations/ollama.validation';
@@ -19,6 +17,10 @@ import type {
 import type {
   ParsedProject,
 } from './project-parser.service';
+
+import type {
+  ResumeExperience,
+} from '../types/resume.types';
 
 const OLLAMA_URL =
   process.env.OLLAMA_URL ??
@@ -123,6 +125,65 @@ ${
 };
 
 /**
+ * Build already-parsed employment experience.
+ *
+ * Experience detection and structure are handled
+ * by TypeScript.
+ *
+ * Ollama only performs semantic interpretation.
+ */
+const buildExperienceReference = (
+  parsedExperiences: ResumeExperience[],
+): string => {
+  if (
+    parsedExperiences.length === 0
+  ) {
+    return 'No employment experience detected.';
+  }
+
+  return parsedExperiences
+    .map(
+      (experience) => `
+EXPERIENCE ID: ${experience.id}
+
+TITLE:
+${experience.title ?? ''}
+
+ORGANIZATION:
+${experience.organization ?? ''}
+
+LOCATION:
+${experience.location ?? ''}
+
+START DATE:
+${experience.startDate ?? ''}
+
+END DATE:
+${experience.endDate ?? ''}
+
+CURRENT:
+${experience.isCurrent === true ? 'Yes' : 'No'}
+
+EMPLOYMENT TYPE:
+${experience.employmentType ?? ''}
+
+EXPERIENCE BULLETS:
+${
+  experience.bullets.length > 0
+    ? experience.bullets.join('\n')
+    : 'None detected'
+}
+
+RAW EXPERIENCE TEXT:
+${experience.rawText ?? ''}
+`,
+    )
+    .join(
+      '\n------------------------------\n',
+    );
+};
+
+/**
  * Builds the AI semantic-analysis prompt.
  *
  * Architecture:
@@ -143,6 +204,7 @@ const buildResumeAnalysisPrompt = (
   sections: DetectedResumeSection[],
   parsedSkills: ParsedSkillCategory[],
   parsedProjects: ParsedProject[],
+  parsedExperiences: ResumeExperience[],
 ): string => {
   const summarySection =
     findSection(
@@ -176,6 +238,11 @@ const buildResumeAnalysisPrompt = (
 
   const projectsReference =
     buildProjectsReference(parsedProjects);
+
+  const experienceReference =
+    buildExperienceReference(
+      parsedExperiences,
+    );
 
   return `
 You are a strict resume semantic analysis system.
@@ -348,16 +415,22 @@ Other
 EMPLOYMENT EXPERIENCE
 ==================================================
 
-Experience section:
+Experience has already been detected and parsed
+by TypeScript.
+
+Use the following structured experience data:
+
+${experienceReference}
+
+The original detected Experience section is also
+provided below for semantic context:
 
 ${
   experience ||
   'NO EMPLOYMENT EXPERIENCE SECTION'
 }
 
-If there is NO experience section:
-
-"experience": []
+IMPORTANT:
 
 Only analyze actual employment experience.
 
@@ -374,7 +447,7 @@ DO NOT treat these as employment:
 
 Do not invent employment.
 
-For actual employment return:
+For every supplied experience return:
 
 - id
 - title
@@ -386,8 +459,50 @@ For actual employment return:
 - domain
 - demonstratedSkills
 
-demonstratedSkills must contain only individual
-skills from AVAILABLE RESUME SKILLS.
+Rules:
+
+1. Preserve the exact EXPERIENCE ID supplied by
+   TypeScript.
+
+2. Preserve the exact experience title.
+
+3. Do not create experience entries.
+
+4. Do not remove experience entries.
+
+5. Do not merge experience entries.
+
+6. Do not split experience entries.
+
+7. demonstratedSkills must contain only individual
+   skills from AVAILABLE RESUME SKILLS.
+
+8. demonstratedSkills must be supported by the
+   experience bullets or raw experience text.
+
+9. Do not return a skill only because it is common
+   for the job title.
+
+10. Return a skill only when the experience provides
+    evidence that the skill was actually used or
+    demonstrated.
+
+11. If no supported resume skill can be identified,
+    return:
+
+    "demonstratedSkills": []
+
+12. Do not invent technologies or skills.
+
+13. Do not convert general responsibilities into
+    technical skills without evidence.
+
+14. The experience ID must come from the supplied
+    TypeScript experience data.
+
+If no employment experience exists:
+
+"experience": []
 
 ==================================================
 PROFILE
@@ -524,6 +639,14 @@ title
 domain
 demonstratedSkills
 
+Optional experience fields:
+
+organization
+employmentType
+startDate
+endDate
+isCurrent
+
 ==================================================
 FINAL CHECK
 ==================================================
@@ -534,6 +657,9 @@ Before returning:
 - Include every detected project.
 - Preserve project IDs.
 - Preserve project names.
+- Include every detected employment experience.
+- Preserve experience IDs.
+- Preserve experience titles.
 - Use individual skills only.
 - Never combine skill categories into one skill.
 - Do not invent projects.
@@ -564,12 +690,14 @@ export const parseResumeSectionsWithOllama =
     sections: DetectedResumeSection[],
     parsedSkills: ParsedSkillCategory[] = [],
     parsedProjects: ParsedProject[] = [],
+    parsedExperiences: ResumeExperience[] = [],
   ): Promise<OllamaAnalysis> => {
     const prompt =
       buildResumeAnalysisPrompt(
         sections,
         parsedSkills,
         parsedProjects,
+        parsedExperiences,
       );
 
     const response = await fetch(
