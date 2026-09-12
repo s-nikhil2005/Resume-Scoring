@@ -1,0 +1,7 @@
+services:
+  languagetool:
+    image: meyay/languagetool:latest
+    container_name: resume-analysis-languagetool
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
