@@ -1,16 +1,20 @@
 "use client";
 
-import { registerUser, loginUser } from "@/lib/api/auth";
-import axios from "axios";
-import Link from "next/link";
 import { useState } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import PasswordRequirements from "@/components/auth/PasswordRequirements";
+import { Eye, EyeOff, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
+import { extractErrorMessage } from "@/lib/api/axios";
 import {
-  authSchema,
-  type AuthFormData,
+  loginSchema,
+  registerSchema,
+  type LoginFormData,
+  type RegisterFormData,
 } from "@/lib/validations/auth.schema";
+import PasswordRequirements from "@/components/auth/PasswordRequirements";
 
 type AuthFormProps = {
   mode: "login" | "register";
@@ -18,20 +22,26 @@ type AuthFormProps = {
 
 export default function AuthForm({ mode }: AuthFormProps) {
   const isLogin = mode === "login";
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectTarget = searchParams.get("redirect") || "/dashboard";
 
+  const { login, register: authRegister } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
-  const [loginError, setLoginError] = useState("");
+  const [serverError, setServerError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   const {
     register,
     handleSubmit,
     control,
     formState: { errors, isSubmitting },
-  } = useForm<AuthFormData>({
-    resolver: zodResolver(authSchema),
+  } = useForm<LoginFormData | RegisterFormData>({
+    resolver: zodResolver(isLogin ? loginSchema : registerSchema),
+    mode: "onTouched",
   });
 
-  const password = useWatch({
+  const passwordValue = useWatch({
     control,
     name: "password",
     defaultValue: "",
@@ -39,270 +49,217 @@ export default function AuthForm({ mode }: AuthFormProps) {
 
   const passwordRequirements = [
     {
-      label: "At least 8 characters",
-      valid: password.length >= 8,
+      label: "At least 6 characters",
+      valid: (passwordValue || "").length >= 6,
     },
     {
-      label: "One lowercase letter",
-      valid: /[a-z]/.test(password),
+      label: "One uppercase letter (A-Z)",
+      valid: /[A-Z]/.test(passwordValue || ""),
     },
     {
-      label: "One uppercase letter",
-      valid: /[A-Z]/.test(password),
+      label: "One lowercase letter (a-z)",
+      valid: /[a-z]/.test(passwordValue || ""),
     },
     {
-      label: "One number",
-      valid: /[0-9]/.test(password),
+      label: "One number (0-9)",
+      valid: /[0-9]/.test(passwordValue || ""),
     },
     {
-      label: "One special character",
-      valid: /[@$!%*?&]/.test(password),
+      label: "One special character (@$!%*?&)",
+      valid: /[@$!%*?&]/.test(passwordValue || ""),
     },
   ];
 
-  const onSubmit = async (data: AuthFormData) => {
-    if (mode === "register") {
-      try {
-        const result = await registerUser(data);
+  const onSubmit = async (data: LoginFormData | RegisterFormData) => {
+    setServerError("");
+    setSuccessMessage("");
 
-        console.log("Registration successful:", result);
-      } catch (error) {
-        if (axios.isAxiosError(error)) {
-          console.log("Registration failed:", error.response?.data);
-        } else {
-          console.log("Registration failed:", error);
-        }
+    try {
+      if (isLogin) {
+        await login({ email: data.email, password: data.password });
+        setSuccessMessage("Authentication successful. Redirecting to dashboard...");
+        router.push(redirectTarget);
+      } else {
+        await authRegister({ email: data.email, password: data.password });
+        setSuccessMessage("Account created successfully! Redirecting...");
+        router.push("/dashboard");
       }
-    }
-
-    if (mode === "login") {
-      setLoginError("");
-
-      try {
-        const result = await loginUser(data);
-
-        console.log("Login successful:", result);
-      } catch (error) {
-        if (axios.isAxiosError(error)) {
-          setLoginError(
-            error.response?.data?.message || "Invalid credentials"
-          );
-        } else {
-          setLoginError("Invalid credentials");
-        }
-      }
+    } catch (err) {
+      const msg = extractErrorMessage(
+        err,
+        isLogin ? "Failed to log in. Please check your credentials." : "Failed to create account. Please try again."
+      );
+      setServerError(msg);
     }
   };
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] w-full bg-stone-100 px-4 pt-8 sm:px-6">
-      <div className="mx-auto w-full max-w-md">
-        <div className="w-full max-w-md">
-          {/* Auth Card */}
-          <div className="rounded-2xl border border-stone-200 bg-white p-6 shadow-xl sm:p-8">
-            {/* Header */}
-            <div className="mb-8 text-center">
-              <h1 className="text-2xl font-bold tracking-tight text-stone-900 sm:text-3xl">
-                {isLogin ? "Welcome Back" : "Create Account"}
-              </h1>
+    <div className="flex min-h-[calc(100vh-4.5rem)] w-full items-center justify-center bg-slate-50 px-4 py-12 sm:px-6">
+      <div className="w-full max-w-md">
+        {/* Auth Card */}
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-7 shadow-lg shadow-slate-200/50 sm:p-9">
+          {/* Header */}
+          <div className="mb-8 text-center">
+            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-500/20">
+              <span className="font-bold text-lg">R</span>
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+              {isLogin ? "Welcome Back" : "Create SaaS Account"}
+            </h1>
+            <p className="mt-2 text-sm text-slate-500">
+              {isLogin
+                ? "Enter your credentials to access your resume analysis dashboard"
+                : "Analyze your resume with AI and boost your interview calls"}
+            </p>
+          </div>
 
-              <p className="mt-2 text-sm text-stone-500">
-                {isLogin
-                  ? "Login to continue to your account"
-                  : "Create your account to get started"}
-              </p>
+          {/* Feedback alerts */}
+          {serverError && (
+            <div className="mb-6 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/80 p-3.5 text-sm text-rose-800">
+              <AlertCircle className="h-5 w-5 shrink-0 text-rose-600 mt-0.5" />
+              <div className="flex-1 font-medium">{serverError}</div>
+            </div>
+          )}
+
+          {successMessage && (
+            <div className="mb-6 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/80 p-3.5 text-sm text-emerald-800">
+              <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600 mt-0.5" />
+              <div className="flex-1 font-medium">{successMessage}</div>
+            </div>
+          )}
+
+          {/* Form */}
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            {/* Email */}
+            <div className="space-y-1.5">
+              <label
+                htmlFor="email"
+                className="block text-sm font-semibold text-slate-700"
+              >
+                Work or Personal Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                placeholder="name@example.com"
+                autoComplete="email"
+                {...register("email")}
+                className={`w-full rounded-xl border bg-slate-50/50 px-4 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:bg-white ${
+                  errors.email
+                    ? "border-rose-400 ring-2 ring-rose-500/10 focus:border-rose-500"
+                    : "border-slate-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/10"
+                }`}
+              />
+              {errors.email && (
+                <p className="text-xs font-medium text-rose-600">
+                  {errors.email.message}
+                </p>
+              )}
             </div>
 
-            {/* Form */}
-            <form
-              onSubmit={handleSubmit(onSubmit)}
-              className="space-y-5"
-            >
-              {/* Email */}
-              <div className="space-y-2">
-                <label
-                  htmlFor="email"
-                  className="block text-sm font-medium text-stone-700"
-                >
-                  Email
-                </label>
-
-                <input
-                  id="email"
-                  type="email"
-                  placeholder="Enter your email"
-                  autoComplete="email"
-                  {...register("email")}
-                  className={`w-full rounded-lg border bg-stone-50 px-4 py-3 text-sm text-stone-900 outline-none transition placeholder:text-stone-400 ${
-                    errors.email
-                      ? "border-red-500 focus:border-red-500 focus:ring-2 focus:ring-red-500/20"
-                      : "border-stone-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
-                  }`}
-                />
-
-                {errors.email && (
-                  <p className="text-sm text-red-600">
-                    {errors.email.message}
-                  </p>
-                )}
-              </div>
-
-              {/* Password */}
-              <div className="space-y-2">
+            {/* Password */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
                 <label
                   htmlFor="password"
-                  className="block text-sm font-medium text-stone-700"
+                  className="block text-sm font-semibold text-slate-700"
                 >
                   Password
                 </label>
-
-                <div className="relative">
-                  <input
-                    id="password"
-                    type={showPassword ? "text" : "password"}
-                    placeholder="Enter your password"
-                    autoComplete={
-                      isLogin ? "current-password" : "new-password"
-                    }
-                    {...register("password")}
-                    className={`w-full rounded-lg border bg-stone-50 px-4 py-3 pr-12 text-sm text-stone-900 outline-none transition placeholder:text-stone-400 ${
-                      errors.password
-                        ? "border-red-500 focus:border-red-500 focus:ring-2 focus:ring-red-500/20"
-                        : "border-stone-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/20"
-                    }`}
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((prev) => !prev)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-500 transition hover:text-stone-700"
-                    aria-label={
-                      showPassword ? "Hide password" : "Show password"
-                    }
-                  >
-                    {showPassword ? (
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        className="h-5 w-5"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M3 3l18 18"
-                        />
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M10.58 10.58a2 2 0 102.83 2.83"
-                        />
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M9.88 4.24A10.4 10.4 0 0112 4c5 0 8.27 4.5 9 6a13.2 13.2 0 01-3.02 3.78"
-                        />
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M6.61 6.61C4.49 8.07 3.33 10.08 3 10.5c.73 1.5 4 6 9 6 1.02 0 1.97-.18 2.83-.49"
-                        />
-                      </svg>
-                    ) : (
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        className="h-5 w-5"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M2.25 12s3.5-6 9.75-6 9.75 6 9.75 6-3.5 6-9.75 6-9.75-6-9.75-6z"
-                        />
-                        <circle cx="12" cy="12" r="2.5" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
-
-                {/* Password Requirements */}
-                {isLogin && password.length > 0 && (
-                  <PasswordRequirements
-                    requirements={passwordRequirements}
-                  />
-                )}
-
-                {errors.password && (
-                  <p className="text-sm text-red-600">
-                    {errors.password.message}
-                  </p>
-                )}
-
-                {/* Login Error */}
-                {isLogin && loginError && (
-                  <p className="text-sm text-red-600">
-                    {loginError}
-                  </p>
-                )}
-              </div>
-
-              {/* Forgot Password */}
-              {isLogin && (
-                <div className="flex justify-end">
+                {isLogin && (
                   <Link
                     href="/forgot-password"
-                    className="text-sm font-medium text-blue-600 transition hover:text-blue-700 hover:underline"
+                    className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
                   >
                     Forgot password?
                   </Link>
+                )}
+              </div>
+
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder={isLogin ? "••••••••" : "Create a strong password"}
+                  autoComplete={isLogin ? "current-password" : "new-password"}
+                  {...register("password")}
+                  className={`w-full rounded-xl border bg-slate-50/50 px-4 py-2.5 pr-11 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:bg-white ${
+                    errors.password
+                      ? "border-rose-400 ring-2 ring-rose-500/10 focus:border-rose-500"
+                    : "border-slate-300 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/10"
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+
+              {errors.password && (
+                <p className="text-xs font-medium text-rose-600">
+                  {errors.password.message}
+                </p>
+              )}
+
+              {/* Password Requirements Checklist (Register only) */}
+              {!isLogin && (passwordValue || "").length > 0 && (
+                <div className="mt-2 rounded-lg bg-slate-50 p-3 border border-slate-200/60">
+                  <p className="text-xs font-semibold text-slate-600 mb-1">
+                    Password requirements:
+                  </p>
+                  <PasswordRequirements requirements={passwordRequirements} />
                 </div>
               )}
+            </div>
 
-              {/* Submit Button */}
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSubmitting
-                  ? "Please wait..."
-                  : isLogin
-                    ? "Login"
-                    : "Register"}
-              </button>
-            </form>
-
-            {/* Bottom Navigation */}
-            <div className="mt-6 flex items-center justify-center gap-1 text-sm text-stone-500">
-              {isLogin ? (
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
+            >
+              {isSubmitting ? (
                 <>
-                  <span>Don&apos;t have an account?</span>
-
-                  <Link
-                    href="/register"
-                    className="font-semibold text-blue-600 transition hover:text-blue-700 hover:underline"
-                  >
-                    Sign up
-                  </Link>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>{isLogin ? "Signing in..." : "Creating account..."}</span>
                 </>
               ) : (
-                <>
-                  <span>Already have an account?</span>
-
-                  <Link
-                    href="/login"
-                    className="font-semibold text-blue-600 transition hover:text-blue-700 hover:underline"
-                  >
-                    Login
-                  </Link>
-                </>
+                <span>{isLogin ? "Sign In to Dashboard" : "Create Free Account"}</span>
               )}
-            </div>
+            </button>
+          </form>
+
+          {/* Bottom Switch */}
+          <div className="mt-7 border-t border-slate-100 pt-5 text-center text-sm text-slate-500">
+            {isLogin ? (
+              <>
+                <span>New to Resume Analyzer? </span>
+                <Link
+                  href="/register"
+                  className="font-semibold text-blue-600 hover:text-blue-700 hover:underline"
+                >
+                  Create an account
+                </Link>
+              </>
+            ) : (
+              <>
+                <span>Already have an account? </span>
+                <Link
+                  href="/login"
+                  className="font-semibold text-blue-600 hover:text-blue-700 hover:underline"
+                >
+                  Sign in
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </div>
